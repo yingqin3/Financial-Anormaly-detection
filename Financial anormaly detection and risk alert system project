@@ -1,0 +1,269 @@
+import pandas as pd
+import numpy as np
+import time
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn import metrics
+from sklearn.metrics import roc_curve
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from imblearn.over_sampling import SMOTE
+from sklearn import preprocessing
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import f1_score, roc_auc_score, roc_curve, precision_recall_curve, auc, make_scorer, recall_score, accuracy_score, precision_score, confusion_matrix
+from sklearn.model_selection import GridSearchCV
+
+cd fraudDetection/
+ls fraudDetection/
+pip install -U imbalanced-learn
+# !pip install pandas-profiling
+pip install https://github.com/pandas-profiling/pandas-profiling/archive/master.zip
+
+ipURL = 'https://github.com/loganlaioffer/fraudDetection/blob/master/IpAddress_to_Country.csv'
+fraudURL = 'https://github.com/loganlaioffer/fraudDetection/blob/master/imbalancedFraudDF.csv'
+
+ipToCountry = pd.read_csv('IpAddress_to_Country.csv')
+fraud_data = pd.read_csv('imbalancedFraudDF.csv')
+
+fraud_data.head()
+#Distribution of the label column
+fraud_data['class'].value_counts()  #seriously imbalanced
+pip install pandas-profiling
+pip install joblib
+import pandas_profiling
+pandas_profiling.ProfileReport(fraud_data)
+
+# count of NaN in each column
+fraud_data.isna().sum()
+fraud_data.isnull().sum(axis = 1)
+
+#boxplot 
+import seaborn as sns
+sns.boxplot(fraud_data['purchase_value'], orient = 'v')
+
+start = time.time()
+countries = []
+for i in range(len(fraud_data)):
+    ip_address = fraud_data.loc[i, 'ip_address']#number
+    #below [] is list of T/F, tmp is a df of shape n * 3, where n is 1 if found a match or 0 if no match
+    tmp = ipToCountry[(ipToCountry['lower_bound_ip_address'] <= ip_address) &
+                    (ipToCountry['upper_bound_ip_address'] >= ip_address)]
+    if len(tmp) == 1:#found match
+        countries.append(tmp['country'].values[0])
+    else:#no match
+        countries.append('NA')       
+fraud_data['country'] = countries
+runtime = time.time() - start 
+print("Lookup took", runtime, "seconds.")
+
+ip_address = fraud_data.loc[6, 'ip_address']
+tmp = ipToCountry[(ipToCountry['lower_bound_ip_address'] <= ip_address) &
+                    (ipToCountry['upper_bound_ip_address'] >= ip_address)]
+print(fraud_data.user_id.nunique())#138376
+print(len(fraud_data.index))#138376
+
+#process date and time
+fraud_data['interval_after_signup'] = (pd.to_datetime(fraud_data['purchase_time']) - pd.to_datetime(
+        fraud_data['signup_time'])).dt.total_seconds()  #dt:datetime package
+fraud_data['signup_days_of_year'] = pd.DatetimeIndex(fraud_data['signup_time']).dayofyear
+fraud_data['signup_seconds_of_day'] = pd.DatetimeIndex(fraud_data['signup_time']).second + 60 * pd.DatetimeIndex(
+    fraud_data['signup_time']).minute + 3600 * pd.DatetimeIndex(fraud_data['signup_time']).hour
+fraud_data['purchase_days_of_year'] = pd.DatetimeIndex(fraud_data['purchase_time']).dayofyear
+fraud_data['purchase_seconds_of_day'] = pd.DatetimeIndex(fraud_data['purchase_time']).second + 60 * pd.DatetimeIndex(
+    fraud_data['purchase_time']).minute + 3600 * pd.DatetimeIndex(fraud_data['purchase_time']).hour
+fraud_data = fraud_data.drop(['user_id','signup_time','purchase_time'], axis=1)
+
+print(fraud_data.source.value_counts())
+
+y = fraud_data['class']
+X = fraud_data.drop(['class'], axis=1)
+#split into train/test
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+print("X_train.shape:", X_train.shape)
+print("y_train.shape:", y_train.shape)
+X_train['country'].value_counts(ascending=True)
+
+#converting needs to be done after split
+X_train = pd.get_dummies(X_train, columns=['source', 'browser'])#need to drop ['source', 'browser']? no, auto dropped by get_dummies 
+X_train['sex'] = (X_train.sex == 'M').astype(int)
+
+# the more a device is shared, the more suspicious
+X_train_device_id_mapping = X_train.device_id.value_counts(dropna=False)
+X_train['n_dev_shared'] = X_train.device_id.map(X_train_device_id_mapping)# number of times device_id occurred in train data
+
+# the more a ip is shared, the more suspicious
+X_train_ip_address_mapping = X_train.ip_address.value_counts(dropna=False)
+X_train['n_ip_shared'] = X_train.ip_address.map(X_train_ip_address_mapping)
+
+# the less visit from a country, the more suspicious
+X_train_country_mapping = X_train.country.value_counts(dropna=False)
+X_train['n_country_shared'] = X_train.country.map(X_train_country_mapping)#lots of NAs in country column, #without dropna=False will produce nan in this col
+
+X_train = X_train.drop(['device_id','ip_address','country'], axis=1)
+
+#分开mapping，并且将X_train的map作用于X_test,避免sneak peaking
+X_test = pd.get_dummies(X_test, columns=['source', 'browser'])
+X_test['sex'] = (X_test.sex == 'M').astype(int)
+
+# the more a device is shared, the more suspicious
+X_test['n_dev_shared'] = X_test.device_id.map(X_test.device_id.value_counts(dropna=False))
+
+# the more a ip is shared, the more suspicious
+X_test['n_ip_shared'] = X_test.ip_address.map(X_test.ip_address.value_counts(dropna=False))
+
+# the less visit from a country, the more suspicious
+X_test['n_country_shared'] = X_test.country.map(X_test.country.value_counts(dropna=False))
+
+X_test = X_test.drop(['device_id','ip_address','country'], axis=1)
+# instantiate the model (using the default parameters)
+logreg = LogisticRegression()
+
+# fit the model with data
+logreg.fit(X_train,y_train)
+
+# predict on test
+y_pred=logreg.predict(X_test)
+
+cm = metrics.confusion_matrix(y_test, y_pred)   #LR Evaluation: confusion matrix
+cmDF = pd.DataFrame(cm, columns=['pred_0', 'pred_1'], index=['true_0', 'true_1']) #创建dataframe
+print(cmDF)
+
+classifier_RF = RandomForestClassifier(random_state=0) 
+
+classifier_RF.fit(X_train, y_train)
+
+# predict class labels 0/1 for the test set
+predicted = classifier_RF.predict(X_test)
+
+# generate class probabilities
+probs = classifier_RF.predict_proba(X_test)
+
+# generate evaluation metrics
+print("%s: %r" % ("accuracy_score is: ", accuracy_score(y_test, predicted)))
+print("%s: %r" % ("roc_auc_score is: ", roc_auc_score(y_test, probs[:, 1])))
+print("%s: %r" % ("f1_score is: ", f1_score(y_test, predicted )))#string to int
+
+print ("confusion_matrix is: ")
+cm = confusion_matrix(y_test, predicted)
+cmDF = pd.DataFrame(cm, columns=['pred_0', 'pred_1'], index=['true_0', 'true_1'])
+print(cmDF)
+print('recall =',float(cm[1,1])/(cm[1,0]+cm[1,1]))
+print('precision =', float(cm[1,1])/(cm[1,1] + cm[0,1]))#1.0
+
+
+
+#smote sampling: handle imbalanced data
+smote = SMOTE(random_state=12)
+x_train_sm, y_train_sm = smote.fit_sample(X_train, y_train)
+unique, counts = np.unique(y_train_sm, return_counts=True)
+print(np.asarray((unique, counts)).T)
+
+#RF on smoted training data
+classifier_RF_sm = RandomForestClassifier(random_state=0)
+
+classifier_RF_sm.fit(x_train_sm, y_train_sm)
+
+# predict class labels for the test set
+predicted_sm = classifier_RF_sm.predict(X_test)
+
+# generate class probabilities
+probs_sm = classifier_RF_sm.predict_proba(X_test)
+
+# generate evaluation metrics
+print("%s: %r" % ("accuracy_score_sm is: ", accuracy_score(y_test, predicted_sm)))
+print("%s: %r" % ("roc_auc_score_sm is: ", roc_auc_score(y_test, probs_sm[:, 1])))
+print("%s: %r" % ("f1_score_sm is: ", f1_score(y_test, predicted_sm )))#string to int
+
+print ("confusion_matrix_sm is: ")
+cm_sm = confusion_matrix(y_test, predicted_sm)
+cmDF = pd.DataFrame(cm_sm, columns=['pred_0', 'pred_1'], index=['true_0', 'true_1'])
+print(cmDF)
+print('recall or sens_sm =',float(cm_sm[1,1])/(cm_sm[1,0]+cm_sm[1,1]))
+print('precision_sm =', float(cm_sm[1,1])/(cm_sm[1,1] + cm_sm[0,1]))
+
+
+
+#Parameter tuning by GridSearchCV
+from sklearn.metrics import make_scorer
+scorers = {
+    'precision_score': make_scorer(precision_score),
+    'recall_score': make_scorer(recall_score),
+    'f1_score': make_scorer(f1_score, pos_label=1)
+    
+}
+def grid_search_wrapper(model, parameters, refit_score='f1_score'):
+    """
+    fits a GridSearchCV classifier using refit_score for optimization(refit on the best model according to refit_score)
+    prints classifier performance metrics
+    """
+    
+    grid_search = GridSearchCV(model, parameters, scoring=scorers, refit=refit_score,
+                           cv=3, return_train_score=True, n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+
+    # make the predictions
+    y_pred = grid_search.predict(X_test)
+    y_prob = grid_search.predict_proba(X_test)[:, 1]
+    
+    print('Best params for {}'.format(refit_score))
+    print(grid_search.best_params_)
+
+    # confusion matrix on the test data.
+    print('\nConfusion matrix of Random Forest optimized for {} on the test data:'.format(refit_score))
+    cm = confusion_matrix(y_test, y_pred)
+    cmDF = pd.DataFrame(cm, columns=['pred_0', 'pred_1'], index=['true_0', 'true_1'])
+    print(cmDF)
+    
+    print("\t%s: %r" % ("roc_auc_score is: ", roc_auc_score(y_test, y_prob)))
+    print("\t%s: %r" % ("f1_score is: ", f1_score(y_test, y_pred)))#string to int
+
+    print('recall = ', float(cm[1,1]) / (cm[1,0] + cm[1,1]))
+    print('precision = ', float(cm[1,1]) / (cm[1, 1] + cm[0,1]))
+
+    return grid_search
+
+# C: inverse of regularization strength, smaller values specify stronger regularization
+LRGrid = {"C" : np.logspace(-2,2,5), "penalty":["l1","l2"]}# l1 lasso l2 ridge
+#param_grid = {'C': [0.01, 0.1, 1, 10, 100], 'penalty': ['l1', 'l2']}
+logRegModel = LogisticRegression(random_state=0)
+grid_search_LR_f1 = grid_search_wrapper(logRegModel, LRGrid, refit_score='f1_score')
+parameters = {        
+'max_depth': [None, 5, 15],
+'n_estimators' :  [10,150],
+'class_weight' : [{0: 1, 1: w} for w in [0.2, 1, 100]]
+}
+
+clf = RandomForestClassifier(random_state=0)
+grid_search_rf_f1 = grid_search_wrapper(clf, parameters, refit_score='f1_score')
+best_rf_model_f1 = grid_search_rf_f1.best_estimator_
+results_f1 = pd.DataFrame(grid_search_rf_f1.cv_results_) #cv_results_，做成dictionary，使其可以传进dataframe
+results_sortf1 = results_f1.sort_values(by='mean_test_f1_score', ascending=False)
+results_sortf1[['mean_test_precision_score', 'mean_test_recall_score', 'mean_test_f1_score', 'mean_train_precision_score', 'mean_train_recall_score', 'mean_train_f1_score','param_max_depth', 'param_class_weight', 'param_n_estimators']].round(3).head()
+
+df = pd.DataFrame(best_rf_model_f1.feature_importances_, index = X_train.columns, columns=['importance']).sort_values('importance', ascending=False)
+grid_search_rf_recall = grid_search_wrapper(clf, parameters, refit_score='recall_score')
+best_RF_model_recall = grid_search_rf_recall.best_estimator_
+
+# predict class labels for the test set
+predictedBest_recall = best_RF_model_recall.predict(X_test)
+
+# generate class probabilities
+probsBest_recall = best_RF_model_recall.predict_proba(X_test)
+
+results_recall = pd.DataFrame(grid_search_rf_recall.cv_results_)# recall score is different from above, as above is metric on test data, this is performance on cv data
+results_sortrecall = results_recall.sort_values(by='mean_test_recall_score', ascending=False)
+results_sortrecall[['mean_test_precision_score', 'mean_test_recall_score', 'mean_test_f1_score', 'mean_train_precision_score', 'mean_train_recall_score', 'mean_train_f1_score','param_max_depth', 'param_class_weight', 'param_n_estimators']].round(3).head()
+#recall is worse than default rf?? no this is on test, but train recall is better
+
+
+
+trainDF = pd.concat([X_train, y_train], axis=1) 
+pd.crosstab(trainDF["n_dev_shared"],trainDF["class"]) 
+fraud_data.groupby("class")[['interval_after_signup']].mean()
+fraud_data.groupby("class")[['interval_after_signup']].median()
+fraud_data[fraud_data['class'] == 1].head(100)
+
+t = (10 * probsBest_recall[:, 1]).astype(int)
+unique, counts = np.unique(t, return_counts=True)
+print(np.asarray((unique, counts)).T)
