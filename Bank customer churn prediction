@@ -1,0 +1,260 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import accuracy_score
+from sklearn import model_selection
+from sklearn.model_selection import GridSearchCV
+
+df = pd.read_csv('bank_churn.csv')
+df.head()
+df.info()
+df.nunique()
+df.describe()
+
+y = df['Exited']
+print(y.sum()/y.shape[0] * 100) #imbalanced data
+df[['CreditScore', 'Age', 'Tenure', 'NumOfProducts','Balance', 'EstimatedSalary']].describe()
+
+#use boxplot to check feature distribution
+_, po = plt.subplots(2,3, figsize = [20,10])
+sns.boxplot(x = 'Exited', y = 'CreditScore', data = df, ax = po[0][0])
+sns.boxplot(x='Exited', y ='Age', data=df, ax=po[0][1])
+sns.boxplot(x='Exited', y ='Tenure', data=df, ax=po[0][2])
+sns.boxplot(x='Exited', y ='NumOfProducts', data=df, ax=po[1][0])
+sns.boxplot(x='Exited', y ='Balance', data=df, ax=po[1][1])
+sns.boxplot(x='Exited', y ='EstimatedSalary', data=df, ax=po[1][2])
+
+#use histogram to understand categorical feature
+fig,axes = plt.subplots(2,2, figsize=[20,10])
+sns.countplot(x='Exited', hue='Geography', data=df, ax=axes[0][0])
+sns.countplot(x='Exited', hue='Gender', data=df, ax=axes[0][1])
+sns.countplot(x='Exited', hue='HasCrCard', data=df, ax=axes[1][0])
+sns.countplot(x='Exited', hue='IsActiveMember', data=df, ax=axes[1][1])
+
+# understand correlations
+corr_score = df[['CreditScore', 'Age', 'Tenure', 'NumOfProducts','Balance', 'EstimatedSalary']].corr()
+sns.heatmap(corr_score)
+
+
+#Feature engineering
+#ordinal encoding
+df['Gender'] = df['Gender'] == 'Female'
+#one-hot encoding
+df = pd.get_dummies(df, columns = ['Geography'])
+# get sparse feature by drop useless features
+to_drop = ['RowNumber','CustomerId','Surname','Exited']
+X = df.drop(to_drop, axis = 1)
+y = df['Exited']
+
+#Model training and result evaluation
+X_train, X_test, y_train, y_test = model_selection.train_test_split(X, y, test_size=0.20, stratify = y, random_state=1)
+print('training data has ' + str(X_train.shape[0]) + ' observation with ' + str(X_train.shape[1]) + ' features')
+print('test data has ' + str(X_test.shape[0]) + ' observation with ' + str(X_test.shape[1]) + ' features')
+
+#standardization
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+#build model
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier 
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn import svm
+
+# Logistic Regression
+classifier_logistic = LogisticRegression()
+# K Nearest Neighbors
+classifier_KNN = KNeighborsClassifier()
+# Random Forest
+classifier_RF = RandomForestClassifier()
+#navie bayes
+classifier_NB = GaussianNB()
+#SVM
+classifier_SVM = svm.SVC(probability=True, C = 1000, gamma = 0.01) #根据grid修改的
+
+#model training
+#1
+classifier_logistic.fit(X_train, y_train)
+y_pred = classifier_logistic.predict(X_test)
+accuracy_score(y_test,y_pred)
+#2
+classifier_KNN.fit(X_train, y_train)
+classifier_KNN.predict(X_test)
+classifier_KNN.score(X_test, y_test)
+#3
+classifier_RF.fit(X_train, y_train)
+classifier_RF.predict(X_test)
+classifier_RF.score(X_test, y_test)
+#4
+classifier_NB.fit(X_train, y_train)
+classifier_NB.predict(X_test)
+classifier_NB.score(X_test, y_test)
+#不推荐使用，数据量比较大
+classifier_SVM.fit(X_train, y_train)
+classifier_SVM.predict(X_test)
+classifier_SVM.score(X_test, y_test)
+
+#Basic evaluation: RF>SVM>KNN>NB>LOG
+# 5- FOLD Validation
+model_names = ['Logistic Regression','KNN','Random Forest', 'Naive Bayes', 'Support vector machine']
+model_list = [classifier_logistic, classifier_KNN, classifier_RF, classifier_NB, classifier_SVM]
+count = 0
+for classifier in model_list:
+    cv_score = model_selection.cross_val_score(classifier, X_train, y_train, cv=5)
+    print(cv_score)
+    print('Model accuracy of ' + model_names[count] + ' is ' + format(cv_score.mean(), '.4f'))
+    count += 1
+# RF>SVM>KNN>NB>LOG
+
+#tuning
+def print_grid_search_metrics(gs):
+    print ("Best score: " + str(gs.best_score_))
+    print ("Best parameters set:")
+    best_parameters = gs.best_params_
+    for param_name in sorted(best_parameters.keys()):
+        print(param_name + ':' + str(best_parameters[param_name]))
+    print('best_LR_model:', gs.best_estimator_ )
+    
+    #1 log
+# Possible hyperparamter options for Logistic Regression Regularization
+# Penalty is choosed from L1 or L2
+# C is the lambda value(weight) for L1 and L2 c = 1/lambda
+parameters = {
+    'penalty':('l1', 'l2'),  #create a dict
+    'C':(0.01, 0.01, 1, 5, 10)
+}
+Grid_LR = GridSearchCV(LogisticRegression(solver='liblinear'),parameters, cv=5)
+Grid_LR.fit(X_train, y_train)
+print_grid_search_metrics(Grid_LR)
+
+#2 KNN
+# Possible hyperparamter options for KNN
+# Choose k
+parameters = {
+    'n_neighbors':[1,3,5,7,9,11,13,15,17] #一般选择奇数
+}
+Grid_KNN = GridSearchCV(KNeighborsClassifier(),parameters, cv=5)
+Grid_KNN.fit(X_train, y_train)
+print_grid_search_metrics(Grid_KNN)
+
+# RF Choose the number of trees
+parameters = {
+    'n_estimators' : [40,60,80],
+    'max_features': ['auto', 'sqrt', 'log2'],
+    'criterion' :['gini', 'entropy']
+}
+Grid_RF = GridSearchCV(RandomForestClassifier(),parameters, cv=5)
+Grid_RF.fit(X_train, y_train)
+print_grid_search_metrics(Grid_RF)
+
+#naive bayes无参数可调
+# 4 svm
+#C: 目标函数的惩罚系数C，用来平衡分类间隔margin和错分样本的 C = 1/lambda
+#gamma：核函数的系数('Poly', 'RBF' and 'Sigmoid'), 默认是gamma = 1 / n_features;
+parameters = {'C': [0.1, 1, 10, 100, 1000],  
+              'gamma': [1, 0.1, 0.01, 0.001, 0.0001], 
+              'kernel': ['rbf']}  # 'sigmoid', 'poly', 'linear'
+Grid_SVM = GridSearchCV(svm.SVC(), parameters, cv=5) 
+Grid_SVM.fit(X_train, y_train)
+print_grid_search_metrics(Grid_SVM)
+
+#Model Evaluation - Confusion Matrix (Precision, Recall, Accuracy)
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+# calculate accuracy, precision and recall, [[tn, fp],[]]
+def cal_evaluation(classifier, cm):
+    tn = cm[0][0]
+    fp = cm[0][1]
+    fn = cm[1][0]
+    tp = cm[1][1]
+    accuracy  = (tp + tn) / (tp + fp + fn + tn + 0.0)
+    precision = tp / (tp + fp + 0.0)
+    recall = tp / (tp + fn + 0.0)
+    print (classifier)
+    print ("Accuracy is: " + str(accuracy))
+    print ("precision is: " + format(precision, '.4f'))
+    print ("recall is: " + format(recall, '.4f'))
+    print ()
+
+# print out confusion matrices
+def draw_confusion_matrices(confusion_matricies):
+    for cm in confusion_matrices:
+        classifier, cm = cm[0], cm[1]
+        cal_evaluation(classifier, cm)
+        
+        best_RF_model = Grid_RF.best_estimator_ 
+best_LR_model = Grid_LR.best_estimator_ 
+best_KNN_model = Grid_KNN.best_estimator_ 
+best_NB_model = classifier_NB
+best_SVM_model = Grid_SVM.best_estimator_ 
+confusion_matrices = [
+    ("Random Forest", confusion_matrix(y_test,best_RF_model.predict(X_test))),
+    ("Logistic Regression", confusion_matrix(y_test,best_LR_model.predict(X_test))),
+    ("K nearest neighbor", confusion_matrix(y_test, best_KNN_model.predict(X_test))),
+    ("naive bayes", confusion_matrix(y_test,best_NB_model.predict(X_test))),
+    ("svm", confusion_matrix(y_test,best_SVM_model.predict(X_test)))
+]
+draw_confusion_matrices(confusion_matrices)
+
+#Model Evaluation - ROC & AUC
+from sklearn.metrics import roc_curve
+from sklearn import metrics
+#1 RF
+y_pred_rf = best_RF_model.predict_proba(X_test)[:, 1] #预测为1的概率
+fpr_rf, tpr_rf, thresh_rf = roc_curve(y_test, y_pred_rf)
+#2 LR
+y_pred_lr = best_LR_model.predict_proba(X_test)[:, 1]
+fpr_lr, tpr_lr, thresh_lr = roc_curve(y_test, y_pred_lr)
+#3 KNN
+y_pred_knn = best_KNN_model.predict_proba(X_test)[:, 1]
+fpr_knn, tpr_knn, thresh_knn = roc_curve(y_test, y_pred_knn)
+#4 NB
+y_pred_nb = best_NB_model.predict_proba(X_test)[:, 1]
+fpr_nb, tpr_nb, thresh_nb = roc_curve(y_test, y_pred_nb)
+#5 SVM
+y_pred_svm = classifier_SVM.predict_proba(X_test)[:, 1]
+fpr_svm, tpr_svm, thresh_svm = roc_curve(y_test, y_pred_svm)
+
+fpr_list = [fpr_lr, fpr_rf, fpr_knn, fpr_nb, fpr_svm]
+tpr_list = [tpr_lr, tpr_rf, tpr_knn, tpr_nb, tpr_svm]
+label = ['LR', 'RF', 'KNN', 'NB', 'SVM']
+def plot_ROC_AUC(fpr_list, tpr_list, label):
+    for i in range(len(model_names)):
+        plt.figure(i+1)
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.plot(fpr_list[i], tpr_list[i], label=label[i])
+        plt.xlabel('False positive rate')
+        plt.ylabel('True positive rate')
+        plt.title('ROC curve')
+        plt.legend(loc='best')
+        plt.show()
+        print('auc score : ' + label[i])
+        print(metrics.auc(fpr_list[i], tpr_list[i]))
+plot_ROC_AUC(fpr_list, tpr_list, label)
+
+#Feature Importance Discussion
+importances = best_RF_model.feature_importances_
+indices = np.argsort(importances)[::-1]
+print("Feature importance ranking by Random Forest Model:")
+for ind in range(X.shape[1]):
+  print ("{0} : {1}".format(X.columns[indices[ind]],round(importances[indices[ind]], 4)))
+  
+  #compare to 整个集
+# check feature importance of random forest for feature selection
+forest = RandomForestClassifier()
+forest.fit(X, y) #数据无需标准化，RF的训练算法是计算entropy或者gini，跟你的数值大小没有关系
+
+importances1 = forest.feature_importances_
+
+indices1 = np.argsort(importances)[::-1]
+
+# Print the feature ranking
+print("Feature importance ranking by Random Forest Model:")
+for ind in range(X.shape[1]):
+  print ("{0} : {1}".format(X.columns[indices1[ind]],round(importances1[indices[ind]], 4)))
